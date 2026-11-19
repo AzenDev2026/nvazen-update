@@ -1,0 +1,488 @@
+#!/bin/sh
+# =============================================================================
+#  nvazen_update —— nvazen 系统在线更新器
+#
+#  作用：
+#    读取 nvazen-update 仓库的最新 Release，下载更新包并解包，
+#    再根据包内 lead.txt 的指令完成安装，让 ISO 安装后的系统也能持续更新。
+#
+#  lead.txt 语法：
+#    # 注释                     注释，忽略
+#    /remove old-目标 [路径]     删除已安装的旧“目标”（默认位置 INSTALL_BASE/目标）
+#    /install new-目标 [路径]    把更新包里的新“目标”安装到位（默认位置 INSTALL_BASE/目标）
+#    /run 脚本 [参数...]         在更新包目录里执行安装脚本
+#
+#  用法：
+#    nvazen_update                   检查并应用最新更新
+#    nvazen_update --check           只检查是否有新版本（有新版本时退出码 100）
+#    nvazen_update --dry-run         预演：打印将要执行的操作，不做任何修改
+#    nvazen_update --force           忽略版本记录，强制重新应用最新版本
+#    nvazen_update --package x.zip   跳过网络，直接安装本地更新包（测试用）
+#    nvazen_update --config 文件     使用指定的配置文件
+#
+#  退出码：
+#    0    成功 / 已是最新版本
+#    1    出错
+#    100  仅 --check：发现新版本
+#
+#  依赖：sh、curl 或 wget、tar、sed、find（zip 包还需要 unzip）
+#  可选：GH_TOKEN 环境变量（提高 GitHub API 限额）
+# =============================================================================
+
+# ---------- 默认配置（可被配置文件 / 环境变量覆盖） ----------
+REPO_OWNER="AzenDev2026"
+REPO_NAME="nvazen-update"
+API_BASE=""
+INSTALL_BASE="/opt/nvazen"
+STATE_DIR=""
+STATE_FILE=""
+CONFIG_FILE=""
+PKG_FILE=""
+GH_TOKEN=""
+UA="nvazen_update/1.0.0"
+DRY_RUN=0
+FORCE=0
+CHECK_ONLY=0
+VERBOSE=0
+KEEP_WORK=0
+WORK=""
+PKG=""
+ASSET_URL=""
+TAG=""
+EXTRACT_DIR=""
+pkg_root=""
+LN=0
+
+# ---------- 基础输出 ----------
+info()    { printf '%s\n' "[nvazen_update] $*"; }
+warn()    { printf '%s\n' "[nvazen_update] 警告: $*" >&2; }
+error()   { printf '%s\n' "[nvazen_update] 错误: $*" >&2; }
+verbose() { [ "$VERBOSE" -ge 1 ] && printf '%s\n' "[nvazen_update] $*"; }
+
+die() {
+    KEEP_WORK=1
+    error "$*"
+    if [ -n "$WORK" ] && [ -d "$WORK" ]; then
+        printf '%s\n' "[nvazen_update] 出错现场已保留，可用于排查: $WORK" >&2
+    fi
+    exit 1
+}
+
+usage() {
+    cat <<'EOF'
+用法: nvazen_update [选项]
+
+选项:
+  --check              只检查是否有新版本（不下载不安装）；发现新版本退出码 100
+  --dry-run, -n        预演：打印将要执行的操作，不做任何修改
+  --force, -f          忽略版本记录，强制重新应用最新版本
+  --package <文件>     跳过网络与版本检查，直接安装本地更新包（测试用）
+  --config <文件>      使用指定的配置文件（默认 /etc/nvazen-update.conf）
+  --keep               保留临时目录（调试用）
+  --verbose, -v        输出更多细节
+  --version            显示版本号
+  --help, -h           显示本帮助
+
+配置文件（可选）支持以下键:
+  REPO_OWNER=xxx  REPO_NAME=xxx  INSTALL_BASE=xxx  STATE_DIR=xxx
+
+环境变量（优先级最高）:
+  NVZ_REPO_OWNER / NVZ_REPO_NAME / NVZ_INSTALL_BASE / NVZ_STATE_DIR / NVZ_GH_TOKEN
+
+退出码: 0 成功或已最新；1 出错；100 仅 --check 时表示有新版本
+EOF
+}
+
+# ---------- 参数解析 ----------
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)    usage; exit 0 ;;
+            --version)    echo "nvazen_update 1.0.0"; exit 0 ;;
+            -n|--dry-run) DRY_RUN=1 ;;
+            -f|--force)   FORCE=1 ;;
+            --check)      CHECK_ONLY=1 ;;
+            -v|--verbose) VERBOSE=1 ;;
+            --keep)       KEEP_WORK=1 ;;
+            --config)
+                [ $# -ge 2 ] || die "--config 需要参数"
+                CONFIG_FILE="$2"; shift ;;
+            --package)
+                [ $# -ge 2 ] || die "--package 需要参数"
+                PKG_FILE="$2"; shift ;;
+            *) die "未知参数: $1（--help 查看用法）" ;;
+        esac
+        shift
+    done
+}
+
+# ---------- 配置文件 ----------
+load_config() {
+    _f="$1"
+    [ -n "$_f" ] && [ -f "$_f" ] || return 0
+    while IFS='=' read -r _k _v; do
+        _k=$(printf '%s' "$_k" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r')
+        _v=$(printf '%s' "$_v" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r')
+        case "$_k" in
+            '#'*|'') continue ;;
+            REPO_OWNER)   REPO_OWNER=$_v ;;
+            REPO_NAME)    REPO_NAME=$_v ;;
+            INSTALL_BASE) INSTALL_BASE=$_v ;;
+            STATE_DIR)    STATE_DIR=$_v ;;
+        esac
+    done < "$_f"
+}
+
+apply_env_overrides() {
+    [ -n "${NVZ_REPO_OWNER:-}" ]   && REPO_OWNER="$NVZ_REPO_OWNER"
+    [ -n "${NVZ_REPO_NAME:-}" ]    && REPO_NAME="$NVZ_REPO_NAME"
+    [ -n "${NVZ_INSTALL_BASE:-}" ] && INSTALL_BASE="$NVZ_INSTALL_BASE"
+    [ -n "${NVZ_STATE_DIR:-}" ]    && STATE_DIR="$NVZ_STATE_DIR"
+    [ -n "${NVZ_GH_TOKEN:-}" ]     && GH_TOKEN="$NVZ_GH_TOKEN"
+}
+
+validate_base() {
+    case "$INSTALL_BASE" in
+        ""|"/") die "INSTALL_BASE 配置不合法: $INSTALL_BASE" ;;
+    esac
+}
+
+pick_state() {
+    if [ -z "$STATE_DIR" ]; then
+        if [ "$(id -u 2>/dev/null)" = "0" ]; then
+            STATE_DIR="/var/lib/nvazen-update"
+        else
+            STATE_DIR="${HOME:-/tmp}/.local/share/nvazen-update"
+        fi
+    fi
+    STATE_FILE="$STATE_DIR/current_version"
+}
+
+# ---------- 网络 ----------
+http_get() {
+    _url="$1"; _out="$2"
+    if command -v curl >/dev/null 2>&1; then
+        if [ -n "$GH_TOKEN" ]; then
+            curl -fsL -A "$UA" -H "Authorization: Bearer $GH_TOKEN" -o "$_out" "$_url"
+        else
+            curl -fsL -A "$UA" -o "$_out" "$_url"
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if [ -n "$GH_TOKEN" ]; then
+            wget -q -U "$UA" --header="Authorization: Bearer $GH_TOKEN" -O "$_out" "$_url"
+        else
+            wget -q -U "$UA" -O "$_out" "$_url"
+        fi
+    else
+        return 1
+    fi
+}
+
+http_status() {
+    _url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -o /dev/null -w '%{http_code}' -A "$UA" "$_url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --server-response -O /dev/null "$_url" 2>&1 \
+            | sed -n 's/^.*HTTP\/[0-9.]* \([0-9][0-9]*\).*/\1/p' | tail -n 1
+    else
+        echo 000
+    fi
+}
+
+# ---------- JSON 解析（优先 jq，否则 sed 兜底） ----------
+json_field() {
+    _f="$1"; _k="$2"
+    if command -v jq >/dev/null 2>&1; then
+        jq -r ".$_k // empty" "$_f" 2>/dev/null
+    else
+        sed -n "s/.*\"$_k\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$_f" | head -n 1
+    fi
+}
+
+pick_asset() {
+    if command -v jq >/dev/null 2>&1; then
+        _list=$(jq -r '.assets[]?.browser_download_url // empty' "$WORK/latest.json" 2>/dev/null)
+    else
+        _list=$(sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' "$WORK/latest.json")
+    fi
+    printf '%s\n' "$_list" | while IFS= read -r _u; do
+        case "$_u" in
+            *.zip|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar)
+                printf '%s\n' "$_u"
+                break
+                ;;
+        esac
+    done
+}
+
+# ---------- Release 获取 ----------
+fetch_release() {
+    info "查询最新 Release: ${REPO_OWNER}/${REPO_NAME} ..."
+    if ! http_get "$API_BASE/releases/latest" "$WORK/latest.json"; then
+        _code=$(http_status "$API_BASE/releases/latest")
+        case "$_code" in
+            404) die "仓库 ${REPO_OWNER}/${REPO_NAME} 还没有发布过 Release，请先发布第一个版本" ;;
+            403|429) die "GitHub API 访问受限 (HTTP $_code)：未带 token 时每小时限 60 次，可设置 GH_TOKEN 环境变量提高限额" ;;
+            *) die "无法访问 GitHub (HTTP $_code)，请检查网络连接" ;;
+        esac
+    fi
+    TAG=$(json_field "$WORK/latest.json" tag_name)
+    [ -n "$TAG" ] || die "无法从 Release 信息中解析版本号 (tag_name)"
+    ASSET_URL=$(pick_asset)
+    if [ -z "$ASSET_URL" ]; then
+        ASSET_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${TAG}.tar.gz"
+        verbose "Release 没有可用的压缩包附件，改用 tag 源码包: $ASSET_URL"
+    fi
+}
+
+download_pkg() {
+    case "$ASSET_URL" in
+        *.zip)            PKG="$WORK/update.zip" ;;
+        *.tar.gz|*.tgz)   PKG="$WORK/update.tar.gz" ;;
+        *.tar.xz|*.txz)   PKG="$WORK/update.tar.xz" ;;
+        *.tar)            PKG="$WORK/update.tar" ;;
+        *)                PKG="$WORK/update.pkg" ;;
+    esac
+    info "下载更新包: $ASSET_URL"
+    http_get "$ASSET_URL" "$PKG" || die "下载更新包失败，请检查网络连接"
+}
+
+# ---------- 解包与校验 ----------
+extract_pkg() {
+    _a="$1"; _d="$2"
+    mkdir -p "$_d" || die "无法创建解包目录: $_d"
+    case "$_a" in
+        *.zip)
+            command -v unzip >/dev/null 2>&1 || die "更新包是 zip 格式，但系统没有 unzip（请安装 unzip，或改用 tar.gz 包）"
+            ( cd "$_d" && unzip -qo "$_a" ) || die "解包失败: $_a" ;;
+        *.tar.gz|*.tgz)
+            tar -xzf "$_a" -C "$_d" || die "解包失败: $_a" ;;
+        *.tar.xz|*.txz)
+            tar -xJf "$_a" -C "$_d" || die "解包失败: $_a" ;;
+        *.tar)
+            tar -xf "$_a" -C "$_d" || die "解包失败: $_a" ;;
+        *)
+            tar -xf "$_a" -C "$_d" 2>/dev/null || die "不支持的更新包格式: $_a（请使用 zip / tar.gz / tar.xz）" ;;
+    esac
+}
+
+verify_checksum() {
+    _d="$1"
+    _sums=$(find "$_d" \( -name 'SHA256SUMS' -o -name 'SHA256SUMS.txt' -o -name 'checksums.sha256' \) -print 2>/dev/null | head -n 1)
+    [ -n "$_sums" ] || return 0
+    if command -v sha256sum >/dev/null 2>&1; then
+        info "更新包内含校验文件，正在校验完整性..."
+        _dir=$(dirname "$_sums")
+        if ! ( cd "$_dir" && sha256sum -c "$(basename "$_sums")" ); then
+            die "完整性校验失败！更新包可能已损坏或被篡改"
+        fi
+        info "校验通过"
+    else
+        warn "更新包内含校验文件，但系统没有 sha256sum，跳过校验"
+    fi
+}
+
+# ---------- 权限预检 ----------
+preflight() {
+    [ "$DRY_RUN" -eq 1 ] && return 0
+    if [ "$(id -u)" != "0" ]; then
+        if ! mkdir -p "$INSTALL_BASE" 2>/dev/null || [ ! -w "$INSTALL_BASE" ]; then
+            warn "安装目录 $INSTALL_BASE 需要 root 权限（当前不是 root）"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# ---------- lead.txt 指令执行 ----------
+sane_path() {
+    case "$1" in
+        ""|"/"|*".."*) return 1 ;;
+    esac
+    case "$1" in
+        /bin|/sbin|/boot|/lib|/lib64|/etc|/var|/usr|/opt|/home|/root|/mnt|/media|/dev|/proc|/sys|/tmp) return 1 ;;
+    esac
+    return 0
+}
+
+do_remove() {
+    _spec="${1:-}"; _path="${2:-}"
+    _name=${_spec#old-}
+    if [ -z "$_spec" ] || [ "$_name" = "$_spec" ]; then
+        die "lead.txt 第 ${LN} 行格式错误: remove 的目标应为 old-名称"
+    fi
+    [ -n "$_path" ] || _path="$INSTALL_BASE/$_name"
+    sane_path "$_path" || die "lead.txt 第 ${LN} 行拒绝操作危险路径: $_path"
+    if [ ! -e "$_path" ] && [ ! -L "$_path" ]; then
+        info "remove $_name: 目标不存在，跳过 ($_path)"
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "[预演] remove $_name: 将删除 $_path"
+    else
+        info "remove $_name: 删除 $_path"
+        rm -rf -- "$_path" || die "删除失败: $_path"
+    fi
+}
+
+do_install() {
+    _spec="${1:-}"; _path="${2:-}"
+    _name=${_spec#new-}
+    if [ -z "$_spec" ] || [ "$_name" = "$_spec" ]; then
+        die "lead.txt 第 ${LN} 行格式错误: install 的目标应为 new-名称"
+    fi
+    _src="$pkg_root/$_name"
+    if [ ! -e "$_src" ] && [ ! -L "$_src" ]; then
+        die "lead.txt 第 ${LN} 行: 更新包里找不到目标 \"$_name\""
+    fi
+    [ -n "$_path" ] || _path="$INSTALL_BASE/$_name"
+    sane_path "$_path" || die "lead.txt 第 ${LN} 行拒绝安装到危险路径: $_path"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "[预演] install $_name: 包内 $_name → $_path"
+        return 0
+    fi
+    if [ -d "$_src" ] && [ ! -L "$_src" ]; then
+        mkdir -p "$_path" || die "无法创建目录: $_path"
+        cp -a "$_src"/. "$_path"/ || die "安装失败: $_name → $_path"
+    else
+        _parent=$(dirname "$_path")
+        mkdir -p "$_parent" || die "无法创建目录: $_parent"
+        cp -a "$_src" "$_path" || die "安装失败: $_name → $_path"
+    fi
+    info "install $_name: 已安装到 $_path"
+}
+
+do_run() {
+    _script="${1:-}"
+    [ -n "$_script" ] || die "lead.txt 第 ${LN} 行格式错误: run 需要脚本名"
+    _s="$pkg_root/$_script"
+    [ -f "$_s" ] || die "lead.txt 第 ${LN} 行: 更新包里找不到脚本 \"$_script\""
+    shift
+    _run_args=""
+    [ $# -gt 0 ] && _run_args="$*"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        info "[预演] run $_script $_run_args"
+        return 0
+    fi
+    info "run $_script $_run_args"
+    ( cd "$pkg_root" && sh "$_script" "$@" ) || die "lead.txt 第 ${LN} 行: 脚本 $_script 执行失败"
+}
+
+apply() {
+    _root="$1"
+    _lead=$(find "$_root" -name lead.txt -print 2>/dev/null | head -n 1)
+    [ -n "$_lead" ] || die "更新包里找不到 lead.txt"
+    pkg_root=$(dirname "$_lead")
+    info "读取安装指引: $_lead"
+    set -f
+    LN=0
+    while IFS= read -r _raw || [ -n "$_raw" ]; do
+        LN=$((LN + 1))
+        _line=$(printf '%s\n' "$_raw" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        [ -z "$_line" ] && continue
+        case "$_line" in
+            '#'*) continue ;;
+            /*) ;;
+            *) die "lead.txt 第 ${LN} 行无法识别（# 开头是注释，/ 开头是指令）: $_raw" ;;
+        esac
+        set -- $_line
+        _cmd="$1"; shift
+        case "$_cmd" in
+            /remove)  do_remove "$@" ;;
+            /install) do_install "$@" ;;
+            /run)     do_run "$@" ;;
+            *) die "lead.txt 第 ${LN} 行未知指令: $_cmd" ;;
+        esac
+    done < "$_lead"
+    set +f
+}
+
+# ---------- 状态记录 ----------
+write_state() {
+    if mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$TAG" > "$STATE_FILE" 2>/dev/null; then
+        info "已记录当前版本: $TAG ($STATE_FILE)"
+    else
+        warn "无法写入状态文件 $STATE_FILE（权限不足？），下次运行仍会重复检测到该版本"
+    fi
+}
+
+# ---------- 临时目录 ----------
+make_workdir() {
+    if command -v mktemp >/dev/null 2>&1; then
+        WORK=$(mktemp -d "${TMPDIR:-/tmp}/nvazen-update.XXXXXX") || die "无法创建临时目录"
+    else
+        WORK="${TMPDIR:-/tmp}/nvazen-update.$$"
+        rm -rf "$WORK"
+        mkdir -p "$WORK" || die "无法创建临时目录: $WORK"
+    fi
+}
+
+cleanup() {
+    if [ -n "$WORK" ] && [ -d "$WORK" ] && [ "$KEEP_WORK" -eq 0 ]; then
+        rm -rf "$WORK"
+    fi
+}
+
+# ---------- 主流程 ----------
+main() {
+    parse_args "$@"
+    load_config "${CONFIG_FILE:-/etc/nvazen-update.conf}"
+    apply_env_overrides
+    API_BASE="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
+    validate_base
+    pick_state
+
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        die "系统缺少 curl 或 wget，无法联网下载更新"
+    fi
+
+    make_workdir
+    trap cleanup 0 1 2 15
+
+    if [ -n "$PKG_FILE" ]; then
+        [ "$CHECK_ONLY" -eq 1 ] && verbose "同时指定了 --check 与 --package，--check 被忽略"
+        case "$PKG_FILE" in
+            /*) ;;
+            *) PKG_FILE="$(pwd)/$PKG_FILE" ;;
+        esac
+        [ -f "$PKG_FILE" ] || die "找不到本地更新包: $PKG_FILE"
+        TAG="local"
+        info "使用本地更新包: $PKG_FILE（跳过网络与版本检查）"
+        EXTRACT_DIR="$WORK/extract"
+        extract_pkg "$PKG_FILE" "$EXTRACT_DIR"
+    else
+        fetch_release
+        CUR=$(cat "$STATE_FILE" 2>/dev/null || true)
+        if [ "$CHECK_ONLY" -eq 1 ]; then
+            if [ "$CUR" = "$TAG" ]; then
+                info "已是最新版本: $TAG"
+                exit 0
+            fi
+            info "发现新版本: $TAG（当前安装: ${CUR:-无记录}）"
+            exit 100
+        fi
+        if [ "$CUR" = "$TAG" ] && [ "$FORCE" -eq 0 ]; then
+            info "已是最新版本 ($TAG)，无需更新（--force 可强制重新应用）"
+            exit 0
+        fi
+        [ -n "$CUR" ] && info "当前安装版本: $CUR"
+        info "开始更新到: $TAG"
+        download_pkg
+        EXTRACT_DIR="$WORK/extract"
+        extract_pkg "$PKG" "$EXTRACT_DIR"
+    fi
+
+    verify_checksum "$EXTRACT_DIR"
+    preflight || die "安装目录缺少写权限，请使用: sudo nvazen_update"
+    apply "$EXTRACT_DIR"
+
+    if [ -z "$PKG_FILE" ]; then
+        write_state
+    else
+        verbose "本地包模式：不写入版本状态"
+    fi
+    info "更新完成！nvazen 已更新到 ${TAG}"
+}
+
+main "$@"

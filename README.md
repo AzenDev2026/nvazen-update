@@ -1,85 +1,86 @@
-# 🐳 NVazen Update · Azen 新闻台
+# 🐳 NVazen Update · The Azen Newsroom
 
-> 这里是 **NVazen 的自动更新仓库**，也是「NVazen Update」应用 News 页的新闻来源。
-> 下面这段新闻会实时显示在每位用户的更新器里 —— 包括现在正在看的你！👋
-
----
-
-## 📰 NVazen 新闻 · 生态正在迅速发展！
-
-### 🚀 NVazen Update 全新上线（2026-11-20）
-
-NVazen 从此告别「重装才能更新」：
-
-- **自动更新** —— 更新器读取本仓库的最新 Release，把 NAAP、DeepTerminal 等组件更新到最新版
-- **全新界面** —— 左侧栏「软件更新 / 系统更新」，News 页随时查看最新动态
-- **新闻台** —— 就是你正在看的这一页，每次打开更新器都能看到 NVazen 的新鲜事
-
-### 🧠 NAAP · 智能应用休眠（App Nap）
-
-NAAP 的 App Nap 技术让后台应用自动「打盹」，省电又流畅，而且每次更新都更聪明。
-
-### 💻 DeepTerminal 2.5.5 · Powerline 随心定制
-
-提示符全面可定制：颜色、尖角/圆角、显示用户还是路径 —— 全都由你决定。
-
-### 🎛️ SystemSettings v1.0 · 一键掌控系统
-
-Windows 11 风格设置中心：深色/浅色/跟随系统、快捷设置卡、设备信息，应有尽有。
-
-### 🧩 生态全家桶
-
-- **NVazenMenu**：定制开始菜单 + 系统信息面板
-- **ArchiveManager**：Windows 风格的压缩包管理器
-- **sysfetch**：极简系统信息工具
-- **azen.dev**：官网持续更新（update 29+）
-- **Azenium 浏览器**：研发中 👀
-
-### 📅 敬请期待
-
-| 项目 | 说明 | 状态 |
-| --- | --- | --- |
-| 系统更新 | 一键升级整个 NVazen 系统 | 🚧 即将推出 |
-| Azenium | NVazen 自己的浏览器 | 🚧 研发中 |
-
-### 📊 生态速览
-
-| 项目 | 是什么 | 状态 |
-| --- | --- | --- |
-| NAAP | 智能应用休眠（App Nap） | ✅ 持续更新 |
-| DeepTerminal | 多功能终端 | ✅ 持续更新 |
-| SystemSettings | 系统设置中心 | ✅ v1.0 |
-| NVazen Update | 自动更新器 | ✅ 全新上线 |
+> This is **NVazen's automatic update repository** — and the news source behind the
+> **News** page of the NVazen Update app. Everything below is shown live inside the
+> updater of every NVazen user... including you, right now! 👋
 
 ---
 
-## 🛠 这个仓库怎么工作
+## 📰 NVazen News · The ecosystem is growing fast!
 
-### 工作原理
+### 🚀 NVazen Update is here (2026-11-20)
+
+NVazen no longer needs a full reinstall to stay fresh:
+
+- **Automatic updates** — the updater reads the latest Release of this repo and brings NAAP, DeepTerminal and other components up to date
+- **Brand-new interface** — a sidebar with "Software update / System update" and a News page for the latest happenings
+- **The Newsroom** — this very page! Open the updater anytime to see what's new in NVazen
+
+### 🧠 NAAP · Smart app nap (App Nap)
+
+NAAP's App Nap technology lets background apps take a nap automatically — saving power and keeping things smooth, and getting smarter with every update.
+
+### 💻 DeepTerminal 2.5.5 · Powerline, your way
+
+The prompt is fully customizable: colors, sharp or rounded arrow ends, showing the user or the path — you decide everything.
+
+### 🎛️ SystemSettings v1.0 · Your system at a glance
+
+A Windows-11-style settings center: dark / light / follow-system themes, quick settings, device info — everything in one place.
+
+### 🧩 The ecosystem family
+
+- **NVazenMenu**: a custom start menu + system info panel
+- **ArchiveManager**: a Windows-style archive manager
+- **sysfetch**: a minimal system info tool
+- **azen.dev**: the official website, constantly updated (update 29+)
+- **Azenium browser**: in development 👀
+
+### 📅 Coming soon
+
+| Project | What it is | Status |
+| --- | --- | --- |
+| System update | One-click upgrade of the whole NVazen system | 🚧 Coming soon |
+| Azenium | NVazen's own browser | 🚧 In development |
+
+### 📊 Ecosystem at a glance
+
+| Project | What it is | Status |
+| --- | --- | --- |
+| NAAP | Smart app nap (App Nap) | ✅ Constantly updated |
+| DeepTerminal | Multi-purpose terminal | ✅ Constantly updated |
+| SystemSettings | Settings center | ✅ v1.0 |
+| NVazen Update | Automatic updater | ✅ Just launched |
+
+---
+
+## 🛠 How this repository works
+
+### How updates flow
 
 ```
-nvazen_update（系统内）
-   │  1. 查询最新 Release（tag 就是版本号）
+nvazen_update (on the system)
+   │  1. Queries the latest Release (the tag is the version)
    ▼
-GitHub Release（本仓库）
-   │  2. 下载更新包（zip / tar.gz），解包
+GitHub Release (this repo)
+   │  2. Downloads the update package (zip / tar.gz) and extracts it
    ▼
-lead.txt（包内）
-   │  3. 逐行执行安装指令
+lead.txt (inside the package)
+   │  3. Runs the install instructions line by line
    ▼
-目标位置（默认 /opt/nvazen/<目标>）
+Target location (default /opt/nvazen/<target>)
 ```
 
-### lead.txt 语法
+### lead.txt syntax
 
-| 写法 | 作用 |
+| Syntax | Effect |
 | --- | --- |
-| `# ...` | 注释，忽略 |
-| `/remove old-目标 [路径]` | 删除已安装的旧「目标」，不写路径时删 `INSTALL_BASE/目标` |
-| `/install new-目标 [路径]` | 把更新包里的「目标」安装到位，不写路径时装到 `INSTALL_BASE/目标` |
-| `/run 脚本 [参数...]` | 在更新包目录里执行安装脚本 |
+| `# ...` | Comment, ignored |
+| `/remove old-target [path]` | Removes the installed old "target" (defaults to `INSTALL_BASE/target`) |
+| `/install new-target [path]` | Installs the "target" from the package (defaults to `INSTALL_BASE/target`) |
+| `/run script [args...]` | Runs an install script inside the package directory |
 
-示例（更新 NAAP 时就会是这样）：
+Example (this is what updating NAAP looks like):
 
 ```text
 #this is the nvazen update lead file
@@ -88,37 +89,37 @@ lead.txt（包内）
 /install new-naap
 ```
 
-### 更新包结构
+### Update package structure
 
-更新包就是一个 zip / tar.gz，里面**必须**有 `lead.txt`，其余按需放置：
+An update package is just a zip / tar.gz that **must** contain `lead.txt`:
 
 ```
 nvazen-update-v0.1.0.zip
 ├── lead.txt
-├── naap/            ← 新版 NAAP 的全部文件（install new-naap 装的就是这个目录）
+├── naap/            ← all files of the new NAAP (this is what `install new-naap` installs)
 │   └── ...
-└── post.sh          ← 可选：/run post.sh 会执行它
+└── post.sh          ← optional: `/run post.sh` executes it
 ```
 
-### nvazen_update 用法
+### nvazen_update usage
 
 ```
-nvazen_update                     # 检查并应用最新更新
-nvazen_update --check             # 只检查有没有新版本（退出码 100 = 有新版本）
-nvazen_update --dry-run           # 预演，只看会做什么、不实际改动
-nvazen_update --force             # 版本一样也强制重新应用
-nvazen_update --package 包.zip    # 本地测试更新包，跳过网络
+nvazen_update                     # check and apply the latest update
+nvazen_update --check             # only check for a new version (exit code 100 = update available)
+nvazen_update --dry-run           # dry run: show what would happen, change nothing
+nvazen_update --force             # reapply even when the version is the same
+nvazen_update --package pkg.zip   # install a local test package, skipping the network
 ```
 
-### 发布一个新版本（网页操作）
+### Publishing a new version (from the web)
 
-1. 打开本仓库 → **Releases** → **Draft a new release**
-2. 点 **Choose a tag**，输入新版本号，例如 `v0.1.0` → **Create new tag**
-3. 标题随意（如 `v0.1.0 更新 NAAP`），把打包好的更新包拖进附件区
-4. 点 **Publish release**
+1. Open this repo → **Releases** → **Draft a new release**
+2. Click **Choose a tag**, enter the new version, e.g. `v0.1.0` → **Create new tag**
+3. Give it any title (e.g. `v0.1.0 updates NAAP`) and drag the packaged update into the attachments
+4. Click **Publish release**
 
-> **tag 就是版本号**，每次发布必须用新的、更高的 tag，否则更新器会认为没有新版本。
+> **The tag is the version** — every release must use a new, higher tag, otherwise the updater will think there is nothing new.
 
-## 许可证
+## License
 
-GPL-3.0，见 [LICENSE](LICENSE)。
+GPL-3.0, see [LICENSE](LICENSE).

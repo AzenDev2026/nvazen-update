@@ -8,6 +8,19 @@
 
 ## 📰 NVazen News · The ecosystem is growing fast!
 
+### 🩹 Bug-fix round: DeepTerminal 2.6.1 + nvazen_update 1.1.0 (2026-11-21)
+
+A small polish day with two nice improvements:
+
+- **DeepTerminal 2.6.1** — the welcome banner no longer renders as garbled
+  characters on first open, and every new tab now runs `clear` automatically
+  so it always starts fresh.
+- **nvazen_update 1.1.0** — the updater now watches the NVazen components: if
+  something is missing (for example DeepTerminal), it says
+  *"DeepTerminal not found, update = install latest version"* and reinstalls
+  it automatically. The updater is also downloadable and installable on its
+  own now (see [Install nvazen_update](#-install-nvazen_update) below).
+
 ### 🚀 NVazen Update is here (2026-11-20)
 
 NVazen no longer needs a full reinstall to stay fresh:
@@ -53,6 +66,56 @@ A Windows-11-style settings center: dark / light / follow-system themes, quick s
 | NVazen Update | Automatic updater | ✅ Just launched |
 
 ---
+
+### Missing components heal themselves
+
+The updater knows the NVazen components (DeepTerminal today, more as they
+ship in packages). Before each update it checks whether they are installed —
+and when one is missing, the update simply doubles as a fresh install of its
+latest version:
+
+```
+[nvazen_update] DeepTerminal not found, update = install latest version
+```
+
+That also means deleting a component by accident is not a problem: the next
+update (or `--check`, which reports it with exit code 100) brings it right
+back.
+
+## 🛠 Install nvazen_update
+
+### Option 1 — from this repository (recommended)
+
+```bash
+git clone https://github.com/AzenDev2026/nvazen-update.git
+cd nvazen-update
+sudo ./install.sh          # installs to /usr/local/bin
+```
+
+Running `./install.sh` without `sudo` installs it for the current user into
+`~/.local/bin` instead. Remove it anytime with `sudo ./install.sh --uninstall`.
+
+### Option 2 — one line, no clone
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AzenDev2026/nvazen-update/main/install.sh -o /tmp/nvazen-install.sh && sudo sh /tmp/nvazen-install.sh
+```
+
+### Option 3 — from the latest Release
+
+Every [Release](https://github.com/AzenDev2026/nvazen-update/releases)
+attaches an update package (tar.gz) that contains `nvazen_update`, `lead.txt`
+and the latest components. Download it, extract the updater from it, and let
+it install the package:
+
+```bash
+tar -xzf nvazen-update-v0.2.0.tar.gz
+chmod +x nvazen_update
+sudo ./nvazen_update --package nvazen-update-v0.2.0.tar.gz
+```
+
+After the first install, updates come from the updater itself:
+`sudo nvazen_update` (or `nvazen_update --check` to only look).
 
 ## 🛠 How this repository works
 
@@ -105,7 +168,8 @@ nvazen-update-v0.1.0.zip
 
 ```
 nvazen_update                     # check and apply the latest update
-nvazen_update --check             # only check for a new version (exit code 100 = update available)
+nvazen_update --check             # check only (exit 100 = update available
+                                  #   or a component is missing)
 nvazen_update --dry-run           # dry run: show what would happen, change nothing
 nvazen_update --force             # reapply even when the version is the same
 nvazen_update --package pkg.zip   # install a local test package, skipping the network

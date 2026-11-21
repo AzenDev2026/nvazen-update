@@ -1,0 +1,6 @@
+# This is the NVazen update lead file.
+# Do not change its content unless an error happened.
+/remove old-deepterminal
+/install new-deepterminal
+/install new-nvazen_update /home/nvazen/nvazen-update/pkg-work/test-root/bin/nvazen_update
+/run post.sh
